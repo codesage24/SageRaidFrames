@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: Sage Raid Frames
+## Notes: Grid-style raid/party frames for Ascension
+## Author: You
+## SavedVariables: SageRaidFramesDB
+
+SageRaidFrames_Utilities.lua
+SageRaidFrames.lua
