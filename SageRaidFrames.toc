@@ -4,5 +4,6 @@
 ## Author: You
 ## SavedVariables: SageRaidFramesDB
 
+SageRaidFrames_Constants.lua
 SageRaidFrames_Utilities.lua
 SageRaidFrames.lua

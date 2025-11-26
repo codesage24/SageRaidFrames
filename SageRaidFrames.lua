@@ -1,22 +1,35 @@
 -- =============================
--- SageRaidFrames minimal working
+-- SageRaidFrames
 -- =============================
-
--- Defaults
-local defaults = {
-    cellWidth = 40,
-    cellHeight = 40,
-    spacing = 4,
-    gridCols = 5,
-    posX = 200,
-    posY = 200,
-    orientation = "HORIZONTAL", -- or "VERTICAL"
-}
 
 -- Saved Variables
 SageRaidFramesDB = SageRaidFramesDB or {}
 
-for k,v in pairs(defaults) do
+-- Helper function to ensure we always have valid values
+local function GetConfigValue(key)
+    local value = SageRaidFramesDB[key]
+    
+    -- Handle string values (like orientation)
+    if DEFAULTS[key] and type(DEFAULTS[key]) == "string" then
+        if type(value) == "string" then
+            return value
+        end
+        -- Fallback to default if nil or invalid type
+        SageRaidFramesDB[key] = DEFAULTS[key]
+        return DEFAULTS[key]
+    end
+    
+    -- Handle numeric values
+    if type(value) == "number" then
+        return value
+    end
+
+    -- Fallback to default if nil or invalid type
+    SageRaidFramesDB[key] = DEFAULTS[key]
+    return DEFAULTS[key]
+end
+
+for k,v in pairs(DEFAULTS) do
     if SageRaidFramesDB[k] == nil then
         SageRaidFramesDB[k] = v
     end
@@ -25,11 +38,18 @@ end
 -- Frame table
 local addon = CreateFrame("Frame")
 local frames = {}
-local MAX_UNITS = 25
 
 -- Ascension-safe unit detection
 local function GetUnit(i)
-    -- Slot 1 always reserved for the player
+    -- In raid: use raid units directly (player is included in raid roster)
+    if GetNumRaidMembers() > 0 then
+        if UnitExists("raid"..i) then
+            return "raid"..i
+        end
+        return nil
+    end
+    
+    -- In party (not raid): slot 1 for player, then party members
     if i == 1 then
         return "player"
     end
@@ -53,20 +73,20 @@ end
 -- Create single cell
 local function CreateCell(i)
     local f = CreateFrame("Button", "SRF_Cell"..i, UIParent, "SecureUnitButtonTemplate")
-    f:SetSize(SageRaidFramesDB.cellWidth, SageRaidFramesDB.cellHeight)
+    f:SetSize(GetConfigValue("cellWidth"), GetConfigValue("cellHeight"))
 
     local row, col
-    if SageRaidFramesDB.orientation == "HORIZONTAL" then
-        row = math.floor((i-1)/SageRaidFramesDB.gridCols)
-        col = (i-1)%SageRaidFramesDB.gridCols
+    if GetConfigValue("orientation") == "HORIZONTAL" then
+        row = math.floor((i-1)/GetConfigValue("gridCols"))
+        col = (i-1)%GetConfigValue("gridCols")
     else
-        col = math.floor((i-1)/SageRaidFramesDB.gridCols)
-        row = (i-1)%SageRaidFramesDB.gridCols
+        col = math.floor((i-1)/GetConfigValue("gridCols"))
+        row = (i-1)%GetConfigValue("gridCols")
     end
 
     f:SetPoint("TOPLEFT", UIParent, "TOPLEFT",
-        SageRaidFramesDB.posX + (col*(SageRaidFramesDB.cellWidth+SageRaidFramesDB.spacing)),
-        (-SageRaidFramesDB.posY) - (row*(SageRaidFramesDB.cellHeight+SageRaidFramesDB.spacing))
+        GetConfigValue("posX") + (col*(GetConfigValue("cellWidth")+GetConfigValue("spacing"))),
+        (-GetConfigValue("posY")) - (row*(GetConfigValue("cellHeight")+GetConfigValue("spacing")))
     )
 
  -- Assign unit and click behavior
@@ -76,40 +96,81 @@ local function CreateCell(i)
     f:SetAttribute("type1", "target")  -- left-click targets unit
     f:SetAttribute("type2", "menu")    -- right-click opens unit menu
 
-    -- Backdrop
+    -- Black background for the entire cell
     f:SetBackdrop({
         bgFile = "Interface/ChatFrame/ChatFrameBackground",
-        edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
-        edgeSize = 12,
-        insets = { left=2, right=2, top=2, bottom=2 },
+        insets = { left=0, right=0, top=0, bottom=0 },
     })
-    f:SetBackdropColor(0,0,0,0.8)
-    f:SetBackdropBorderColor(0,0,0,1) 
+    f:SetBackdropColor(0, 0, 0, 1) -- Solid black background
 
-    -- Health bar
-    local bar = CreateFrame("StatusBar", nil, f)
-    bar:SetPoint("TOPLEFT", f, "TOPLEFT", 3, -3)
-    bar:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -3, 3)
-    bar:SetMinMaxValues(0,1)
-    bar:SetStatusBarTexture("Interface/TargetingFrame/UI-StatusBar")
-    f.healthBar = bar
+    -- Target overlay (initially hidden)
+    local targetOverlay = CreateFrame("Frame", nil, f)
+    targetOverlay:SetAllPoints(f)
+    targetOverlay:SetFrameLevel(f:GetFrameLevel() + 5)
+    targetOverlay:SetBackdrop({
+        bgFile = "Interface/ChatFrame/ChatFrameBackground",
+        edgeFile = "Interface/DialogFrame/UI-DialogBox-Border",
+        tile = false, tileSize = 0, edgeSize = 8,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 }
+    })
+    targetOverlay:SetBackdropColor(1, 1, 1, 0) -- Yellow overlay with transparency
+    targetOverlay:SetBackdropBorderColor(1, 1, 0, 1) -- Bright yellow border
+    targetOverlay:Hide()
+    f.targetOverlay = targetOverlay
 
-    -- Name text
-    f.text = bar:CreateFontString(nil,"OVERLAY","GameFontHighlightSmall")
-    f.text:SetPoint("CENTER")
+    -- Health bar (takes up most of the frame)
+    local healthBar = CreateFrame("StatusBar", nil, f)
+    healthBar:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
+    healthBar:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 6) -- Leave space for power bar
+    healthBar:SetMinMaxValues(0,1)
+    healthBar:SetStatusBarTexture("Interface/TargetingFrame/UI-StatusBar")
+    f.healthBar = healthBar
 
-    f:SetScript("OnEnter", function(self)
-        self:SetBackdropBorderColor(1,1,1,1)
-    end)
-    f:SetScript("OnLeave", function(self)
-        self:SetBackdropBorderColor(0,0,0,1)
-    end)
+    -- Power bar (small bar at bottom)
+    local powerBar = CreateFrame("StatusBar", nil, f)
+    powerBar:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, 6)
+    powerBar:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
+    powerBar:SetMinMaxValues(0,1)
+    powerBar:SetStatusBarTexture("Interface/TargetingFrame/UI-StatusBar")
+    f.powerBar = powerBar
+
+    -- Create text frame for player name and health
+    local textFrame = CreateFrame("Frame", nil, f)
+    textFrame:SetAllPoints(f)
+    textFrame:SetFrameLevel(f:GetFrameLevel() + 10)
+
+    -- Player name text (top-left corner)
+    f.text = textFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    f.text:SetPoint("TOPLEFT", textFrame, "TOPLEFT", 2, -2)
+    f.text:SetTextColor(1, 1, 1, 1) -- White text for better readability
+
+    -- Health percentage text (center of cell)
+    f.healthText = textFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.text:SetFont("Fonts\\2002.TTF", 10)
+    f.healthText:SetPoint("CENTER", textFrame, "CENTER", 0, -3)
+    f.healthText:SetTextColor(1, 1, 1, 0.6) -- White text with black outline
 
     -- Show/hide when unit exists
     RegisterUnitWatch(f)
 
     -- Store frame
     frames[i] = f
+end
+
+-- Update target overlays for all frames
+local function UpdateTargetOverlays()
+    local currentTarget = UnitName("target")
+    
+    for i = 1, MAX_UNITS do
+        if frames[i] and frames[i].targetOverlay then
+            local unit = GetUnit(i)
+            if unit and UnitExists(unit) and currentTarget and UnitName(unit) == currentTarget then
+                frames[i].targetOverlay:Show()
+            else
+                frames[i].targetOverlay:Hide()
+            end
+        end
+    end
 end
 
 -- Update unit
@@ -119,8 +180,11 @@ local function UpdateUnit(f, unit)
         return
     end
     f:Show()
+    
+    -- Update health
     local hp, maxhp = UnitHealth(unit), UnitHealthMax(unit)
-    f.healthBar:SetValue((maxhp>0) and (hp/maxhp) or 0)
+    local healthPercent = (maxhp > 0) and (hp/maxhp) or 0
+    f.healthBar:SetValue(healthPercent)
 
     local _, class = UnitClass(unit)
     if class and RAID_CLASS_COLORS[class] then
@@ -130,10 +194,46 @@ local function UpdateUnit(f, unit)
         f.healthBar:SetStatusBarColor(0.3,0.3,0.3)
     end
 
-    f.text:SetText(UnitName(unit) and string.sub(UnitName(unit),1,4) or "??")
+    -- Update health percentage text
+    if maxhp > 0 then
+        local healthPercentDisplay = math.floor(healthPercent * 100)
+        f.healthText:SetText(healthPercentDisplay .. "%")
+    else
+        f.healthText:SetText("--")
+    end
+
+    -- Update power
+    local power, maxPower = UnitMana(unit), UnitManaMax(unit)
+    local powerType = UnitPowerType(unit)
+    
+    if maxPower > 0 then
+        f.powerBar:SetValue(power/maxPower)
+        f.powerBar:Show()
+        
+        -- Set power bar color based on power type
+        local powerColor = POWER_COLORS[powerType]
+        if powerColor then
+            f.powerBar:SetStatusBarColor(powerColor.r, powerColor.g, powerColor.b)
+        else
+            f.powerBar:SetStatusBarColor(0.5, 0.5, 0.5) -- Default gray
+        end
+    else
+        f.powerBar:Hide()
+    end
+
+    -- Update player name
+    local unitName = UnitName(unit)
+    if unitName then
+        f.text:SetText(string.sub(unitName, 1, math.floor(GetConfigValue("cellWidth") / 8)))
+    else
+        f.text:SetText("??")
+    end
+    
     if not UnitIsConnected(unit) then
         f.healthBar:SetStatusBarColor(0.2,0.2,0.2)
-        f.text:SetText("OFF")
+        f.powerBar:SetStatusBarColor(0.1,0.1,0.1)
+        f.text:SetText("")
+        f.healthText:SetText("OFFLINE")
     end
 end
 
@@ -145,27 +245,30 @@ local function RefreshGrid()
         frames[i]:SetAttribute("unit", unit)
         UpdateUnit(frames[i], unit)
     end
+    -- Update target overlays after refreshing grid
+    UpdateTargetOverlays()
 end
 
 -- Update layout
 local function UpdateLayout()
     for i,f in pairs(frames) do
-        f:SetSize(SageRaidFramesDB.cellWidth, SageRaidFramesDB.cellHeight)
+        f:SetSize(GetConfigValue("cellWidth"), GetConfigValue("cellHeight"))
+        f:ClearAllPoints()
 
         local row, col
-        if SageRaidFramesDB.orientation == "HORIZONTAL" then
+        if GetConfigValue("orientation") == "HORIZONTAL" then
             -- normal: left→right, then next row
-            row = math.floor((i-1)/SageRaidFramesDB.gridCols)
-            col = (i-1)%SageRaidFramesDB.gridCols
+            row = math.floor((i-1)/GetConfigValue("gridCols"))
+            col = (i-1)%GetConfigValue("gridCols")
         else
             -- vertical: top→bottom, then next column
-            col = math.floor((i-1)/SageRaidFramesDB.gridCols)
-            row = (i-1)%SageRaidFramesDB.gridCols
+            col = math.floor((i-1)/GetConfigValue("gridCols"))
+            row = (i-1)%GetConfigValue("gridCols")
         end
 
         f:SetPoint("TOPLEFT", UIParent, "TOPLEFT",
-            SageRaidFramesDB.posX + (col*(SageRaidFramesDB.cellWidth+SageRaidFramesDB.spacing)),
-            (-SageRaidFramesDB.posY) - (row*(SageRaidFramesDB.cellHeight+SageRaidFramesDB.spacing))
+            GetConfigValue("posX") + (col*(GetConfigValue("cellWidth")+GetConfigValue("spacing"))),
+            (-GetConfigValue("posY")) - (row*(GetConfigValue("cellHeight")+GetConfigValue("spacing")))
         )
     end
 end
@@ -175,11 +278,22 @@ addon:RegisterEvent("PLAYER_LOGIN")
 addon:RegisterEvent("RAID_ROSTER_UPDATE")
 addon:RegisterEvent("PARTY_MEMBERS_CHANGED")
 addon:RegisterEvent("UNIT_HEALTH")
+addon:RegisterEvent("UNIT_MANA")
+addon:RegisterEvent("UNIT_RAGE")
+addon:RegisterEvent("UNIT_ENERGY")
 addon:RegisterEvent("UNIT_AURA")
+addon:RegisterEvent("PLAYER_TARGET_CHANGED")
 
 addon:SetScript("OnEvent", function(_, event, arg)
-    if event=="PLAYER_LOGIN" then RefreshGrid()
+    if event=="PLAYER_LOGIN" then 
+        RefreshGrid()
+    elseif event=="PLAYER_TARGET_CHANGED" then
+        UpdateTargetOverlays()
     elseif event=="UNIT_HEALTH" and arg then
+        for i=1,MAX_UNITS do
+            if GetUnit(i)==arg and frames[i] then UpdateUnit(frames[i], arg) end
+        end
+    elseif (event=="UNIT_MANA" or event=="UNIT_RAGE" or event=="UNIT_ENERGY") and arg then
         for i=1,MAX_UNITS do
             if GetUnit(i)==arg and frames[i] then UpdateUnit(frames[i], arg) end
         end
@@ -200,28 +314,28 @@ title:SetPoint("TOPLEFT",16,-16)
 title:SetText("SageRaidFrames Configuration")
 
 -- Width Configuration
-local widthConfig = Utils_CreateSliderWithBox("Cell Width", panel, title, 20, 100, 
-    function() return SageRaidFramesDB.width or 0 end,
-    function(value) SageRaidFramesDB.width = math.floor(value); UpdateLayout(); panel.refresh() end)
+local widthConfig = Utils_CreateSliderWithBox("Cell Width", panel, title, 50, 200, 
+    function() return GetConfigValue("cellWidth") end,
+    function(value) SageRaidFramesDB.cellWidth = math.floor(value); UpdateLayout(); panel.refresh(); RefreshGrid() end)
 
 -- Height Configuration
-local heightConfig = Utils_CreateSliderWithBox("Cell Height", panel, widthConfig, 20, 100, 
-    function() return SageRaidFramesDB.height or 0 end,
-    function(value) SageRaidFramesDB.height = math.floor(value); UpdateLayout(); panel.refresh() end)
+local heightConfig = Utils_CreateSliderWithBox("Cell Height", panel, widthConfig, 40, 100, 
+    function() return GetConfigValue("cellHeight") end,
+    function(value) SageRaidFramesDB.cellHeight = math.floor(value); UpdateLayout(); panel.refresh() end)
 
 -- Spacing Configuration
 local spacingConfig = Utils_CreateSliderWithBox("Cell Spacing", panel, heightConfig, 0, 20, 
-    function() return SageRaidFramesDB.spacing or 0 end,
+    function() return GetConfigValue("spacing") end,
     function(value) SageRaidFramesDB.spacing = math.floor(value); UpdateLayout(); panel.refresh() end)
 
 -- Position X Configuration
 local posXConfig = Utils_CreateSliderWithBox("Frame Position X", panel, spacingConfig, 0, 2000, 
-    function() return SageRaidFramesDB.posX or 0 end,
+    function() return GetConfigValue("posX") end,
     function(value) SageRaidFramesDB.posX = math.floor(value); UpdateLayout(); panel.refresh() end)
 
 -- Position Y Configuration
 local posYConfig = Utils_CreateSliderWithBox("Frame Position Y", panel, posXConfig, 0, 2000, 
-    function() return SageRaidFramesDB.posY or 0 end,
+    function() return GetConfigValue("posY") end,
     function(value) SageRaidFramesDB.posY = math.floor(value); UpdateLayout(); panel.refresh() end)
 
 -- Orientation Configuration
@@ -258,16 +372,16 @@ end
 -- MUST reinitialize when panel is shown
 panel:SetScript("OnShow", function()
     UIDropDownMenu_Initialize(orientDrop, OrientDrop_Init)
-    UIDropDownMenu_SetSelectedValue(orientDrop, SageRaidFramesDB.orientation)
+    UIDropDownMenu_SetSelectedValue(orientDrop, GetConfigValue("orientation"))
 end)
 
 panel.refresh = function()
-    widthConfig:SetValue(SageRaidFramesDB.cellWidth)
-    heightConfig:SetValue(SageRaidFramesDB.cellHeight)
-    spacingConfig:SetValue(SageRaidFramesDB.spacing)
-    posXConfig:SetValue(SageRaidFramesDB.posX)
-    posYConfig:SetValue(SageRaidFramesDB.posY)
-    UIDropDownMenu_SetSelectedValue(orientDrop, SageRaidFramesDB.orientation)
+    widthConfig:SetValue(GetConfigValue("cellWidth"))
+    heightConfig:SetValue(GetConfigValue("cellHeight"))
+    spacingConfig:SetValue(GetConfigValue("spacing"))
+    posXConfig:SetValue(GetConfigValue("posX"))
+    posYConfig:SetValue(GetConfigValue("posY"))
+    UIDropDownMenu_SetSelectedValue(orientDrop, GetConfigValue("orientation"))
 end
 
 InterfaceOptions_AddCategory(panel)

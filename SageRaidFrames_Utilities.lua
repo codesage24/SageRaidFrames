@@ -1,3 +1,4 @@
+-- Function for Creating a Slider with an associated Edit Box
 function Utils_CreateSliderWithBox(label, parent, predecessor, minValue, maxValue, getFunc, setFunc)
     -- MUST HAVE A NAME WHEN USING OptionsSliderTemplate
     local slider = CreateFrame("Slider", "SRF_Slider_"..label:gsub("%s+", "_"), parent, "OptionsSliderTemplate")
